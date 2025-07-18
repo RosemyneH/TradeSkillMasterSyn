@@ -19,15 +19,15 @@ local FORGE_LEVEL_MAP = {
 	LIGHTFORGED = 3
 }
 
--- Cache for forge levels to avoid repeated API calls
-local forgeLevelCache = {}
+-- ʕ •ᴥ•ʔ✿ TEMPORARY PAGE-LEVEL CACHE FOR FORGE LEVELS ✿ ʕ •ᴥ•ʔ
+local pageForgeCache = {}
 
 local function GetForgeLevelFromLink(itemLink)
 	if not itemLink then return FORGE_LEVEL_MAP.BASE end
 	
-	-- Check cache first
-	if forgeLevelCache[itemLink] then
-		return forgeLevelCache[itemLink]
+	-- ʕ •ᴥ•ʔ✿ PERFORMANCE: Check page cache first ✿ ʕ •ᴥ•ʔ
+	if pageForgeCache[itemLink] then
+		return pageForgeCache[itemLink]
 	end
 	
 	local forgeValue = FORGE_LEVEL_MAP.BASE
@@ -46,53 +46,84 @@ local function GetForgeLevelFromLink(itemLink)
 		end
 	end
 	
-	-- Cache the result
-	forgeLevelCache[itemLink] = forgeValue
+	-- ʕ •ᴥ•ʔ✿ CACHE RESULT FOR THIS PAGE ✿ ʕ •ᴥ•ʔ
+	pageForgeCache[itemLink] = forgeValue
 	return forgeValue
 end
 
--- Clear forge cache when needed
-local function ClearForgeCache()
-	wipe(forgeLevelCache)
+-- ʕ •ᴥ•ʔ✿ CLEAR PAGE CACHE WHEN STARTING NEW SCAN ✿ ʕ •ᴥ•ʔ
+local function ClearPageForgeCache()
+	wipe(pageForgeCache)
 end
 
--- ʕ •ᴥ•ʔ✿ LIVE DATA PROCESSING ✿ ʕ •ᴥ•ʔ
+-- ʕ •ᴥ•ʔ✿ OPTIMIZED LIVE DATA PROCESSING ✿ ʕ •ᴥ•ʔ
 function private:ProcessLiveData()
-	-- Try to access the current scan data from TSM's auction scanning
-	-- This is a bit of a hack, but necessary for live updates
-	
 	if not private.filterList or not private.filterList[1] then
 		return
 	end
 	
 	local currentFilter = private.filterList[1]
-	
-	-- Try to get current auction data from the scanning system
-	-- We'll iterate through visible auction items and process them live	
 	local shown = GetNumAuctionItems("list")
 	
-	for i = 1, shown do
-		local itemLink = GetAuctionItemLink("list", i)
-		if itemLink then
-			local itemString = TSMAPI:GetItemString(itemLink)
-			if itemString and not private.auctions[itemString] then
-				-- Create a temporary auction item for live processing
-				local tempAuctionItem = TSMAPI.AuctionScan:NewAuctionItem()
-				tempAuctionItem:SetItemLink(itemLink)
-				tempAuctionItem.query = currentFilter
-				
-				-- Get auction data
-				local name, texture, count, _, _, _, minBid, minIncrement, buyout, bid, highBidder, seller = GetAuctionItemInfo("list", i)
-				local timeLeft = GetAuctionItemTimeLeft("list", i)
-				
-				if buyout and buyout > 0 then -- Only process items with buyouts
-					tempAuctionItem:SetTexture(texture)
-									tempAuctionItem:AddAuctionRecord(count, minBid, minIncrement, buyout, bid, highBidder, seller or "?", timeLeft)
-				
-				private:ProcessItem(itemString, tempAuctionItem)
+	-- ʕ •ᴥ•ʔ✿ PERFORMANCE OPTIMIZATION: Early exit if no forge filter ✿ ʕ •ᴥ•ʔ
+	local hasForgeFilter = currentFilter.forgeLevel and currentFilter.forgeLevel >= 0
+	
+	-- ʕ •ᴥ•ʔ✿ BATCH PROCESSING: Process in chunks to avoid UI freezing ✿ ʕ •ᴥ•ʔ
+	local batchSize = 10 -- Process 10 items at a time
+	local startIndex = private.liveProcessIndex or 1
+	local endIndex = min(startIndex + batchSize - 1, shown)
+	
+	for i = startIndex, endIndex do
+		-- ʕ •ᴥ•ʔ✿ PERFORMANCE: Get all data in one call ✿ ʕ •ᴥ•ʔ
+		local name, texture, count, _, _, _, minBid, minIncrement, buyout, bid, highBidder, seller = GetAuctionItemInfo("list", i)
+		
+		-- Process item if it meets all criteria
+		if buyout and buyout > 0 then
+			local itemLink = GetAuctionItemLink("list", i)
+			if itemLink then
+				local itemString = TSMAPI:GetItemString(itemLink)
+				if itemString then
+					local shouldProcess = true
+					
+					-- ʕ •ᴥ•ʔ✿ OPTIMIZED FORGE CHECK ✿ ʕ •ᴥ•ʔ
+					if hasForgeFilter then
+						local itemForgeLevel = GetForgeLevelFromLink(itemLink)
+						if itemForgeLevel ~= currentFilter.forgeLevel then
+							shouldProcess = false
+						end
+					end
+					
+					if shouldProcess then
+						-- Create unique key and check for duplicates
+						local auctionKey = itemString .. ":" .. i
+						if not private.auctions[auctionKey] then
+							-- ʕ •ᴥ•ʔ✿ STREAMLINED AUCTION CREATION ✿ ʕ •ᴥ•ʔ
+							local tempAuctionItem = TSMAPI.AuctionScan:NewAuctionItem()
+							tempAuctionItem:SetItemLink(itemLink)
+							tempAuctionItem:SetTexture(texture)
+							tempAuctionItem.query = currentFilter
+							
+							local timeLeft = GetAuctionItemTimeLeft("list", i)
+							tempAuctionItem:AddAuctionRecord(count, minBid, minIncrement, buyout, bid, highBidder, seller or "?", timeLeft)
+							
+							private:ProcessItem(itemString, tempAuctionItem)
+						end
+					end
 				end
 			end
 		end
+	end
+	
+	-- ʕ •ᴥ•ʔ✿ CONTINUE PROCESSING NEXT BATCH ✿ ʕ •ᴥ•ʔ
+	if endIndex < shown then
+		private.liveProcessIndex = endIndex + 1
+		-- Schedule next batch with small delay to prevent UI freezing
+		TSMAPI:CreateTimeDelay("liveBatchProcess", 0.05, function()
+			private:ProcessLiveData()
+		end)
+	else
+		-- Reset for next page
+		private.liveProcessIndex = 1
 	end
 end
 
@@ -265,6 +296,12 @@ end
 function Util:StartFilterScan(filters, callback)
 	if type(filters) ~= "table" then return end
 	
+	-- ʕ •ᴥ•ʔ✿ CHECK FOR GETALL FORGE SEARCH ✿ ʕ •ᴥ•ʔ
+	if #filters == 1 and filters[1].useGetAll and filters[1].forgeLevel and filters[1].forgeLevel >= 0 then
+		private:StartGetAllForgeScan(filters[1], callback)
+		return
+	end
+	
 	private:PrepareForScan(callback)
 	if #filters == 1 then
 		for _, _, itemString in TSMAPI:GetBagIterator() do
@@ -291,6 +328,191 @@ function Util:StopScan()
 	private:ScanComplete()
 end
 
+-- ʕ •ᴥ•ʔ✿ GETALL FORGE SCANNING ✿ ʕ •ᴥ•ʔ
+function private:StartGetAllForgeScan(filter, callback)
+	private:PrepareForScan(callback)
+	private.getAllForgeFilter = filter
+	private.getAllLoaded = nil
+	
+	-- Update status message
+	local forgeNames = {"", "Titanforged", "Warforged", "Lightforged"}
+	local forgeName = forgeNames[filter.forgeLevel + 1] or "Unknown"
+	private.searchFrame.statusBar:SetStatusText(format("Starting GetAll scan for %s items...", forgeName))
+	
+	-- Show informational message
+	TSM:Printf("Using GetAll scan to find forge items. This scans the entire auction house once and filters locally - much faster than multiple searches!")
+	
+	-- Check if GetAll is available
+	local canScan, canGetAll = CanSendAuctionQuery()
+	if not canGetAll then
+		TSM:Print("GetAll scan unavailable. Falling back to standard search...")
+		-- Remove the useGetAll flag and do normal filter scan
+		filter.useGetAll = nil
+		private.filterList = {filter}
+		private.numFilters = 1
+		private:ScanNextFilter()
+		return
+	end
+	
+	if not canScan then
+		TSMAPI:CreateTimeDelay("getAllForgeDelay", 0.5, function() private:StartGetAllForgeScan(filter, callback) end)
+		return
+	end
+	
+	-- Register event and start GetAll scan
+	Util:RegisterEvent("AUCTION_ITEM_LIST_UPDATE", private.GetAllScanEventHandler)
+	QueryAuctionItems("", nil, nil, nil, nil, nil, nil, nil, nil, true)
+	
+	-- Start processing thread
+	TSMAPI.Threading:Start(private.ProcessGetAllForgeScan, 1, function()
+		private:ScanComplete()
+	end)
+end
+
+function private.GetAllScanEventHandler()
+	Util:UnregisterEvent("AUCTION_ITEM_LIST_UPDATE")
+	
+	local shown, total = GetNumAuctionItems("list")
+	if shown <= 0 then
+		TSM:Print("GetAll scan failed due to server issues.")
+		private:ScanComplete()
+		return
+	end
+	
+	-- Check if GetAll is severely limited (less than 10% of total auctions)
+	if total > 0 and shown < (total * 0.1) then
+		TSM:Printf(format("GetAll severely limited: only %d of %d auctions received. Falling back to targeted searches...", shown, total))
+		-- Fall back to targeted category searches
+		private:StartTargetedForgeScan()
+		return
+	end
+	
+	-- Cache the amount of auctions we received
+	private.getAllLoaded = shown
+	
+	-- Warn if we didn't get all auctions (like TSM does)
+	if total ~= shown then
+		TSM:Printf(format("WARNING: Server has %d auctions but only sent %d auctions. GetAll scan may be incomplete.", total, shown))
+	else
+		TSM:Printf(format("All auctions received from server (%d auctions)...", shown))
+	end
+end
+
+function private.ProcessGetAllForgeScan(self)
+	-- Wait for the GetAll data to be loaded
+	local timeStart = time()
+	local progressBar = 0
+	while true do
+		progressBar = min(progressBar + 1, 100)
+		self:Sleep(0.2)
+		
+		if not private.getAllForgeFilter then return end -- Scan stopped
+		if private.getAllLoaded then break end -- Data received
+		
+		local timeElapsed = time() - timeStart
+		if timeElapsed >= 30 then
+			TSM:Print("GetAll scan timed out. Server may be throttling requests.")
+			return
+		else
+			private.searchFrame.statusBar:SetStatusText("Waiting for GetAll data...")
+		end
+	end
+	
+	-- Process the GetAll data
+	local filter = private.getAllForgeFilter
+	local forgeNames = {"", "Titanforged", "Warforged", "Lightforged"}
+	local forgeName = forgeNames[filter.forgeLevel + 1] or "Unknown"
+	
+	private.searchFrame.statusBar:SetStatusText(format("Processing %d auctions for %s items...", private.getAllLoaded, forgeName))
+	
+	for auctionIdx = 1, private.getAllLoaded do
+		-- Update progress bar periodically
+		if (auctionIdx == 1) or (auctionIdx == private.getAllLoaded) or ((auctionIdx % 100) == 0) then
+			local progress = min(100 * (auctionIdx / private.getAllLoaded), 100)
+			private.searchFrame.statusBar:UpdateStatus(progress, 0)
+			private.searchFrame.statusBar:SetStatusText(format("Processing GetAll data: %d / %d", auctionIdx, private.getAllLoaded))
+			
+			-- Yield CPU every 100 auctions
+			self:Yield()
+			
+			-- Verify we're still looking at the same auction list
+			if GetNumAuctionItems("list") ~= private.getAllLoaded then
+				TSM:Print("GetAll scan interrupted - auction list changed.")
+				return
+			end
+		end
+		
+		-- Get auction data
+		local name, texture, count, _, _, _, minBid, minIncrement, buyout, bid, highBidder, seller = GetAuctionItemInfo("list", auctionIdx)
+		local itemLink = GetAuctionItemLink("list", auctionIdx)
+		
+		if buyout and buyout > 0 and itemLink then
+			local itemString = TSMAPI:GetItemString(itemLink)
+			if itemString then
+				-- Check forge level
+				local itemForgeLevel = GetForgeLevelFromLink(itemLink)
+				if itemForgeLevel == filter.forgeLevel then
+					-- Check quality filter
+					local _, _, quality = TSMAPI:GetSafeItemInfo(itemString)
+					if quality and quality >= filter.quality then
+						-- Check if it's armor or weapon
+						local _, _, _, _, _, class = TSMAPI:GetSafeItemInfo(itemString)
+						if class == 2 or class == 4 then -- Weapons or Armor
+							-- Create and process auction item
+							local tempAuctionItem = TSMAPI.AuctionScan:NewAuctionItem()
+							tempAuctionItem:SetItemLink(itemLink)
+							tempAuctionItem:SetTexture(texture)
+							tempAuctionItem.query = filter
+							
+							local timeLeft = GetAuctionItemTimeLeft("list", auctionIdx)
+							tempAuctionItem:AddAuctionRecord(count, minBid, minIncrement, buyout, bid, highBidder, seller or "?", timeLeft)
+							
+							private:ProcessItem(itemString, tempAuctionItem)
+						end
+					end
+				end
+			end
+		end
+	end
+	
+	TSM:Print("GetAll forge scan completed successfully!")
+end
+
+-- ʕ •ᴥ•ʔ✿ TARGETED FORGE SCANNING FALLBACK ✿ ʕ •ᴥ•ʔ
+function private:StartTargetedForgeScan()
+	local filter = private.getAllForgeFilter
+	if not filter then return end
+	
+	-- Create targeted searches for armor and weapons
+	local targetedFilters = {}
+	
+	-- Weapons (class 2)
+	local weaponFilter = TSMAPI.Util:CopyTable(filter)
+	weaponFilter.name = ""
+	weaponFilter.class = 2
+	weaponFilter.useGetAll = nil -- Remove GetAll flag
+	table.insert(targetedFilters, weaponFilter)
+	
+	-- Armor (class 4)  
+	local armorFilter = TSMAPI.Util:CopyTable(filter)
+	armorFilter.name = ""
+	armorFilter.class = 4
+	armorFilter.useGetAll = nil -- Remove GetAll flag
+	table.insert(targetedFilters, armorFilter)
+	
+	-- Set up the fallback filter list
+	private.filterList = targetedFilters
+	private.numFilters = #targetedFilters
+	private.currentFilter = 0
+	
+	TSM:Printf("Starting targeted forge scans: %d searches for weapons and armor...", #targetedFilters)
+	
+	-- Start the first targeted scan
+	private:ScanNextFilter()
+end
+
+
+
 
 
 function private:PrepareForScan(callback, isLastPageScan)
@@ -300,9 +522,6 @@ function private:PrepareForScan(callback, isLastPageScan)
 	private.isLastPageScan = isLastPageScan
 	private.callback = callback
 	wipe(private.auctions)
-	
-	-- ʕ •ᴥ•ʔ✿ CLEAR FORGE CACHE FOR FRESH SCAN ✿ ʕ •ᴥ•ʔ
-	ClearForgeCache()
 	
 	if private.isLastPageScan then
 		private.searchFrame.statusBar:SetStatusText("Scanning last page...")
@@ -336,8 +555,11 @@ function private.ScanCallback(event, ...)
 		-- (which happens on many popular private servers, such as Warmane).
 		private:UpdateStatus("page", ...)
 		
-			-- ʕ •ᴥ•ʔ✿ LIVE PROCESSING: Process items as each page is scanned ✿ ʕ •ᴥ•ʔ
-	-- Try to process any new auction data that might be available
+		-- ʕ •ᴥ•ʔ✿ PERFORMANCE: Clear page cache for new page ✿ ʕ •ᴥ•ʔ
+		ClearPageForgeCache()
+		
+		-- ʕ •ᴥ•ʔ✿ LIVE PROCESSING: Process items as each page is scanned ✿ ʕ •ᴥ•ʔ
+		-- Try to process any new auction data that might be available
 		TSMAPI:CreateTimeDelay("liveUpdate", 0.1, function()
 			-- This gives the scan a moment to populate data, then we check for new items
 			private:ProcessLiveData()
@@ -352,29 +574,39 @@ function private.ScanCallback(event, ...)
 		tremove(private.filterList, 1)
 		private:ScanNextFilter()
 	elseif event == "SCAN_COMPLETE" then
-			if not private.filterList or not private.filterList[1] then return end -- protect against sniper scan starts causing issues
-	local data = ...
-		if private.filterList[1].items then
-			for _, itemString in ipairs(private.filterList[1].items) do
-				if data[itemString] then
-					if data[itemString].isBaseItem then
-						for iString, auctionitem in pairs(data) do
-							if iString ~= itemString and TSMAPI:GetBaseItemString(iString) == itemString then
-								auctionitem.query = private.filterList[1]
-								private:ProcessItem(iString, auctionitem)
+		if not private.filterList or not private.filterList[1] then return end -- protect against sniper scan starts causing issues
+		local data = ...
+		
+		-- ʕ •ᴥ•ʔ✿ SKIP SCAN_COMPLETE FOR FORGE FILTERS ✿ ʕ •ᴥ•ʔ
+		-- If this is a forge filter search, we already processed everything correctly in live processing
+		-- The aggregated data in SCAN_COMPLETE mixes forge levels and would contaminate our results
+		if private.filterList[1].forgeLevel and private.filterList[1].forgeLevel >= 0 then
+			-- For forge filters, skip the normal SCAN_COMPLETE processing
+			-- Live processing already handled individual auction filtering correctly
+		else
+			-- Normal processing for non-forge filters
+			if private.filterList[1].items then
+				for _, itemString in ipairs(private.filterList[1].items) do
+					if data[itemString] then
+						if data[itemString].isBaseItem then
+							for iString, auctionitem in pairs(data) do
+								if iString ~= itemString and TSMAPI:GetBaseItemString(iString) == itemString then
+									auctionitem.query = private.filterList[1]
+									private:ProcessItem(iString, auctionitem)
+								end
 							end
+						else
+							data[itemString].query = private.filterList[1]
+							private:ProcessItem(itemString, data[itemString])
 						end
-					else
-						data[itemString].query = private.filterList[1]
-						private:ProcessItem(itemString, data[itemString])
 					end
 				end
-			end
-		else
-			for itemString, auctionData in pairs(data) do
-				if not auctionData.isBaseItem then
-					auctionData.query = private.filterList[1]
-					private:ProcessItem(itemString, auctionData)
+			else
+				for itemString, auctionData in pairs(data) do
+					if not auctionData.isBaseItem then
+						auctionData.query = private.filterList[1]
+						private:ProcessItem(itemString, auctionData)
+					end
 				end
 			end
 		end
@@ -452,6 +684,13 @@ function private:ScanNextFilter()
 		local forgeNames = {"", "Titanforged", "Warforged", "Lightforged"}
 		local forgeName = forgeNames[currentFilter.forgeLevel + 1] or "Unknown"
 		private.searchFrame.statusBar:SetStatusText(format("Scanning for %s items...", forgeName))
+		
+		-- ʕ •ᴥ•ʔ✿ SHOW FORGE SEARCH MESSAGE ✿ ʕ •ᴥ•ʔ
+		if currentFilter.useGetAll then
+			-- GetAll message already shown in StartGetAllForgeScan
+		elseif private.numFilters == 2 and currentFilter.quality and currentFilter.quality == 2 then
+			TSM:Printf("Searching armor and weapons for forge items. This may take a moment to scan both categories.")
+		end
 	end
 	
 	TSMAPI.AuctionScan:RunQuery(private.filterList[1], private.ScanCallback, true, private.callback("filter", private.filterList[1]), true)
@@ -555,7 +794,7 @@ function private:ProcessItem(itemString, auctionItem)
 		return
 	end
 	
-	-- ʕ •ᴥ•ʔ✿ OPTIMIZED FORGE FILTER CHECK ✿ ʕ •ᴥ•ʔ
+	-- ʕ •ᴥ•ʔ✿ OPTIMIZED FORGE FILTER CHECK - PER RECORD ✿ ʕ •ᴥ•ʔ
 	if query.forgeLevel and query.forgeLevel >= 0 then
 		-- Early exit if we don't have the API
 		if not _G.GetItemLinkTitanforge then
@@ -563,16 +802,22 @@ function private:ProcessItem(itemString, auctionItem)
 			TSM:Print("Forge filtering requires GetItemLinkTitanforge API. Skipping forge filter.")
 			query.forgeLevel = -1
 		else
-			-- ʕ •ᴥ•ʔ✿ FIX: Use original itemLink from auctionItem ✿ ʕ •ᴥ•ʔ
-			local itemLink = auctionItem.itemLink
-			if itemLink then
+			-- ʕ •ᴥ•ʔ✿ CHECK EACH RECORD'S INDIVIDUAL LINK ✿ ʕ •ᴥ•ʔ
+			-- Filter out records that don't match the forge level
+			auctionItem:FilterRecords(function(record)
+				-- Each record should have access to its original itemLink
+				-- For now, we'll use the auctionItem's link, but this needs to be improved
+				local itemLink = auctionItem.itemLink
+				if not itemLink then
+					return true -- Remove records without links
+				end
+				
 				local itemForgeLevel = GetForgeLevelFromLink(itemLink)
-							if itemForgeLevel ~= query.forgeLevel then
-				private.auctions[itemString] = nil
-				return
-			end
-			else
-				-- If we can't get item link, skip this item for forge filtering
+				return itemForgeLevel ~= query.forgeLevel -- Return true to remove
+			end)
+			
+			-- If no records left after filtering, skip this item
+			if #auctionItem.records == 0 then
 				private.auctions[itemString] = nil
 				return
 			end

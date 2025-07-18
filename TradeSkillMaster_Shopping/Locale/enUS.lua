@@ -56,6 +56,7 @@ L["Invalid Even Only Filter"] = true
 L["Invalid Exact Only Filter"] = true
 L["Invalid Filter"] = true
 L["Invalid Forge Level"] = true
+
 L["Invalid Item Level"] = true
 L["Invalid Item Rarity"] = true
 L["Invalid Item SubType"] = true

@@ -9,7 +9,6 @@
 local TSM = select(2, ...)
 local Search = TSM:NewModule("Search", "AceEvent-3.0", "AceHook-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("TradeSkillMaster_Shopping") -- loads the localization table
-local Util = TSM:GetModule("Util")
 local private = {}
 
 -- ------------------------------------------------ --
@@ -17,7 +16,7 @@ local private = {}
 -- ------------------------------------------------ --
 
 function Search:Show(frame)
-	Util:SetParent(frame)
+	TSM.Util:SetParent(frame)
 	private.searchBar = private.searchBar or private:CreateSearchBar(frame)
 	private.searchBar:Show()
 	private.searchBar.editBox:SetFocus()
@@ -600,20 +599,19 @@ function Search:GetFilters(searchQuery)
 		end
 		
 		if forgeLevel then
-			-- Create multiple targeted searches for different item categories
-			-- This reduces the search scope and makes it faster
-			local categories = {
-				{class=2, subClass=0},   -- Weapons
-				{class=4, subClass=0},   -- Armor
-				{class=3, subClass=0},   -- Gems
-				{class=7, subClass=0},   -- Trade Goods
+			-- ʕ •ᴥ•ʔ✿ GETALL FORGE SEARCH STRATEGY ✿ ʕ •ᴥ•ʔ
+			-- Use GetAll to scan entire auction house and filter locally for forge items
+			local filter = {
+				name="", 
+				class=0, 
+				subClass=0, 
+				forgeLevel=forgeLevel, 
+				quality=2, -- Green+ quality minimum
+				useGetAll=true -- Special flag to indicate we want GetAll scan
 			}
 			
-			for _, cat in ipairs(categories) do
-				tinsert(filters, {name="", class=cat.class, subClass=cat.subClass, forgeLevel=forgeLevel})
-			end
-			
-			filters.num = #categories
+			tinsert(filters, filter)
+			filters.num = 1
 			filters.currentFilter = searchTerm
 			filters.currentSearchTerm = searchTerm
 			return filters
@@ -650,20 +648,51 @@ function Search:GetFilters(searchQuery)
 				isValid = nil
 			end
 		
-			if isValid then
+					if isValid then
+			-- ʕ •ᴥ•ʔ✿ SPECIAL HANDLING FOR FORGE FILTERS WITH OTHER MODIFIERS ✿ ʕ •ᴥ•ʔ
+			if forgeLevel >= 0 and (not queryString or queryString == "") then
+				-- ʕ •ᴥ•ʔ✿ GETALL FORGE FILTER WITH MODIFIERS ✿ ʕ •ᴥ•ʔ
+				-- Use GetAll to scan entire auction house and filter locally for forge items
+				local effectiveRarity = rarity
+				if effectiveRarity == -1 then
+					effectiveRarity = 2 -- Default to uncommon+ (green+) for forge searches
+				end
+				
 				filters.num = filters.num + 1
-				if filters.currentFilter then
-					filters.currentFilter = filters.currentFilter.."; "..queryString
-				else
-					filters.currentFilter = queryString
-				end
-				if filters.currentSearchTerm then
-					filters.currentSearchTerm = filters.currentSearchTerm .. "; "..searchTerm
-				else
-					filters.currentSearchTerm = searchTerm
-				end
+				tinsert(filters, {
+					name="", 
+					usable=usableOnly, 
+					minLevel=minLevel, 
+					maxLevel=maxLevel, 
+					quality=effectiveRarity, 
+					class=0,  -- 0 = all classes for GetAll
+					subClass=0,  -- 0 = all subclasses for GetAll
+					minILevel=minILevel, 
+					maxILevel=maxILevel, 
+					exactOnly=exactOnly, 
+					evenOnly=evenOnly, 
+					maxQuantity=maxQuantity, 
+					maxPrice=maxPrice, 
+					forgeLevel=forgeLevel,
+					useGetAll=true -- Special flag for GetAll scan
+				})
+			else
+				-- Normal filter processing
+				filters.num = filters.num + 1
 				tinsert(filters, {name=queryString, usable=usableOnly, minLevel=minLevel, maxLevel=maxLevel, quality=rarity, class=class, subClass=subClass, minILevel=minILevel, maxILevel=maxILevel, exactOnly=exactOnly, evenOnly=evenOnly, maxQuantity=maxQuantity, maxPrice=maxPrice, forgeLevel=forgeLevel})
 			end
+			
+			if filters.currentFilter then
+				filters.currentFilter = filters.currentFilter.."; "..queryString
+			else
+				filters.currentFilter = queryString
+			end
+			if filters.currentSearchTerm then
+				filters.currentSearchTerm = filters.currentSearchTerm .. "; "..searchTerm
+			else
+				filters.currentSearchTerm = searchTerm
+			end
+		end
 		end
 	end
 	
