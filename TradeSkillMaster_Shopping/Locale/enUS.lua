@@ -37,6 +37,7 @@ L["Enter what you want to search for in this box. You can also use the following
 L["Error creating operation. Operation with name '%s' already exists."] = true
 L["Even (5/10/15/20) Stacks Only"] = true
 L["Favorite Searches"] = true
+L["Forge Level"] = true
 L["General Operation Options"] = true
 L["General Options"] = true
 L["General Settings"] = true
@@ -54,6 +55,7 @@ L["Inline Filters:|r You can easily add common search filters to your search suc
 L["Invalid Even Only Filter"] = true
 L["Invalid Exact Only Filter"] = true
 L["Invalid Filter"] = true
+L["Invalid Forge Level"] = true
 L["Invalid Item Level"] = true
 L["Invalid Item Rarity"] = true
 L["Invalid Item SubType"] = true

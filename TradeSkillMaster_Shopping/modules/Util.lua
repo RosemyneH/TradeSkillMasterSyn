@@ -6,10 +6,119 @@
 --    All Rights Reserved* - Detailed license information included with addon.    --
 -- ------------------------------------------------------------------------------ --
 
+-- load the parent file (TSM) into a local variable and register this file as a module
 local TSM = select(2, ...)
 local Util = TSM:NewModule("Util", "AceEvent-3.0", "AceHook-3.0")
+local private = {}
+
+-- ʕ •ᴥ•ʔ✿ FORGE LEVEL DETECTION ✿ ʕ •ᴥ•ʔ
+local FORGE_LEVEL_MAP = {
+	BASE = 0,
+	TITANFORGED = 1,
+	WARFORGED = 2,
+	LIGHTFORGED = 3
+}
+
+-- Cache for forge levels to avoid repeated API calls
+local forgeLevelCache = {}
+
+local function GetForgeLevelFromLink(itemLink)
+	if not itemLink then return FORGE_LEVEL_MAP.BASE end
+	
+	-- Check cache first
+	if forgeLevelCache[itemLink] then
+		return forgeLevelCache[itemLink]
+	end
+	
+	local forgeValue = FORGE_LEVEL_MAP.BASE
+	if _G.GetItemLinkTitanforge then
+		forgeValue = GetItemLinkTitanforge(itemLink)
+		-- Validate the returned value against known FORGE_LEVEL_MAP values
+		local validValue = false
+		for _, knownValue in pairs(FORGE_LEVEL_MAP) do
+			if forgeValue == knownValue then
+				validValue = true
+				break
+			end
+		end
+		if not validValue then
+			forgeValue = FORGE_LEVEL_MAP.BASE
+		end
+	end
+	
+	-- Cache the result
+	forgeLevelCache[itemLink] = forgeValue
+	return forgeValue
+end
+
+-- Clear forge cache when needed
+local function ClearForgeCache()
+	wipe(forgeLevelCache)
+end
+
+-- ʕ •ᴥ•ʔ✿ LIVE DATA PROCESSING ✿ ʕ •ᴥ•ʔ
+function private:ProcessLiveData()
+	-- Try to access the current scan data from TSM's auction scanning
+	-- This is a bit of a hack, but necessary for live updates
+	
+	if not private.filterList or not private.filterList[1] then
+		return
+	end
+	
+	local currentFilter = private.filterList[1]
+	
+	-- Try to get current auction data from the scanning system
+	-- We'll iterate through visible auction items and process them live	
+	local shown = GetNumAuctionItems("list")
+	
+	for i = 1, shown do
+		local itemLink = GetAuctionItemLink("list", i)
+		if itemLink then
+			local itemString = TSMAPI:GetItemString(itemLink)
+			if itemString and not private.auctions[itemString] then
+				-- Create a temporary auction item for live processing
+				local tempAuctionItem = TSMAPI.AuctionScan:NewAuctionItem()
+				tempAuctionItem:SetItemLink(itemLink)
+				tempAuctionItem.query = currentFilter
+				
+				-- Get auction data
+				local name, texture, count, _, _, _, minBid, minIncrement, buyout, bid, highBidder, seller = GetAuctionItemInfo("list", i)
+				local timeLeft = GetAuctionItemTimeLeft("list", i)
+				
+				if buyout and buyout > 0 then -- Only process items with buyouts
+					tempAuctionItem:SetTexture(texture)
+									tempAuctionItem:AddAuctionRecord(count, minBid, minIncrement, buyout, bid, highBidder, seller or "?", timeLeft)
+				
+				private:ProcessItem(itemString, tempAuctionItem)
+				end
+			end
+		end
+	end
+end
+
+-- locals to speed up function access
+local abs = abs
+local ceil = ceil
+local floor = floor
+local format = format
+local ipairs = ipairs
+local max = max
+local min = min
+local pairs = pairs
+local select = select
+local strfind = strfind
+local strlower = strlower
+local strlenutf8 = strlenutf8
+local strsub = strsub
+local tinsert = tinsert
+local tonumber = tonumber
+local tremove = tremove
+local tsort = table.sort
+local type = type
+local wipe = wipe
+
 local L = LibStub("AceLocale-3.0"):GetLocale("TradeSkillMaster_Shopping") -- loads the localization table
-local private = {auctions={}}
+private.auctions={}
 TSMAPI:RegisterForTracing(private, "TradeSkillMaster_Shopping_private")
 Util.shoppingLog = {}
 
@@ -191,6 +300,10 @@ function private:PrepareForScan(callback, isLastPageScan)
 	private.isLastPageScan = isLastPageScan
 	private.callback = callback
 	wipe(private.auctions)
+	
+	-- ʕ •ᴥ•ʔ✿ CLEAR FORGE CACHE FOR FRESH SCAN ✿ ʕ •ᴥ•ʔ
+	ClearForgeCache()
+	
 	if private.isLastPageScan then
 		private.searchFrame.statusBar:SetStatusText("Scanning last page...")
 	else
@@ -200,6 +313,9 @@ function private:PrepareForScan(callback, isLastPageScan)
 	private.searchFrame.rt:SetDisabled(true)
 	private.searchFrame.statusBar:UpdateStatus(0, 0)
 	TSM.moduleAPICallback = nil
+	
+	-- ʕ •ᴥ•ʔ✿ LIVE RESULTS INDICATOR ✿ ʕ •ᴥ•ʔ
+	private.liveResultsMode = true
 end
 
 function private.ScanCallback(event, ...)
@@ -219,6 +335,13 @@ function private.ScanCallback(event, ...)
 		-- page 2. There's nothing we can do to avoid that rare page-count issue
 		-- (which happens on many popular private servers, such as Warmane).
 		private:UpdateStatus("page", ...)
+		
+			-- ʕ •ᴥ•ʔ✿ LIVE PROCESSING: Process items as each page is scanned ✿ ʕ •ᴥ•ʔ
+	-- Try to process any new auction data that might be available
+		TSMAPI:CreateTimeDelay("liveUpdate", 0.1, function()
+			-- This gives the scan a moment to populate data, then we check for new items
+			private:ProcessLiveData()
+		end)
 	elseif event == "SCAN_INTERRUPTED" or event == "INTERRUPTED" then
 		-- We've been interrupted by the Auction House closing.
 		-- NOTE: "SCAN_INTERRUPTED" is from LibAuctionScan-1.0, which isn't used
@@ -229,8 +352,8 @@ function private.ScanCallback(event, ...)
 		tremove(private.filterList, 1)
 		private:ScanNextFilter()
 	elseif event == "SCAN_COMPLETE" then
-		if not private.filterList or not private.filterList[1] then return end -- protect against sniper scan starts causing issues
-		local data = ...
+			if not private.filterList or not private.filterList[1] then return end -- protect against sniper scan starts causing issues
+	local data = ...
 		if private.filterList[1].items then
 			for _, itemString in ipairs(private.filterList[1].items) do
 				if data[itemString] then
@@ -255,7 +378,14 @@ function private.ScanCallback(event, ...)
 				end
 			end
 		end
-		private:UpdateRT()
+		
+		-- ʕ •ᴥ•ʔ✿ FINAL UPDATE FOR THIS FILTER ✿ ʕ •ᴥ•ʔ
+		-- Only update RT if we haven't already done so in ProcessItem
+		-- This prevents double updates and ensures smooth instant results
+		if private.searchFrame.rt.disabled then
+			private:UpdateRT()
+		end
+		
 		private.searchFrame.rt:ClearSelection()
 		tremove(private.filterList, 1)
 		private:ScanNextFilter()
@@ -315,6 +445,15 @@ function private:ScanNextFilter()
 		return private:ScanComplete()
 	end
 	private:UpdateStatus("scan", private.numFilters-#private.filterList, private.numFilters)
+	
+	-- ʕ •ᴥ•ʔ✿ FORGE SEARCH STATUS MESSAGE ✿ ʕ •ᴥ•ʔ
+	local currentFilter = private.filterList[1]
+	if currentFilter and currentFilter.forgeLevel and currentFilter.forgeLevel >= 0 then
+		local forgeNames = {"", "Titanforged", "Warforged", "Lightforged"}
+		local forgeName = forgeNames[currentFilter.forgeLevel + 1] or "Unknown"
+		private.searchFrame.statusBar:SetStatusText(format("Scanning for %s items...", forgeName))
+	end
+	
 	TSMAPI.AuctionScan:RunQuery(private.filterList[1], private.ScanCallback, true, private.callback("filter", private.filterList[1]), true)
 end
 
@@ -392,6 +531,7 @@ function private:ProcessItem(itemString, auctionItem)
 	-- make sure we haven't already scanned this item (possible with common search terms)
 	if private.auctions[itemString] then return end
 	if not itemString or not auctionItem then return end
+	
 	local query = auctionItem.query
 	query.minILevel = query.minILevel or 0
 	query.maxILevel = query.maxILevel or 0
@@ -415,6 +555,30 @@ function private:ProcessItem(itemString, auctionItem)
 		return
 	end
 	
+	-- ʕ •ᴥ•ʔ✿ OPTIMIZED FORGE FILTER CHECK ✿ ʕ •ᴥ•ʔ
+	if query.forgeLevel and query.forgeLevel >= 0 then
+		-- Early exit if we don't have the API
+		if not _G.GetItemLinkTitanforge then
+			-- If API is not available, skip forge filtering
+			TSM:Print("Forge filtering requires GetItemLinkTitanforge API. Skipping forge filter.")
+			query.forgeLevel = -1
+		else
+			-- ʕ •ᴥ•ʔ✿ FIX: Use original itemLink from auctionItem ✿ ʕ •ᴥ•ʔ
+			local itemLink = auctionItem.itemLink
+			if itemLink then
+				local itemForgeLevel = GetForgeLevelFromLink(itemLink)
+							if itemForgeLevel ~= query.forgeLevel then
+				private.auctions[itemString] = nil
+				return
+			end
+			else
+				-- If we can't get item link, skip this item for forge filtering
+				private.auctions[itemString] = nil
+				return
+			end
+		end
+	end
+	
 	-- remove any records that don't have buyouts
 	for i=#auctionItem.records, 1, -1 do
 		local record = auctionItem.records[i]
@@ -432,6 +596,42 @@ function private:ProcessItem(itemString, auctionItem)
 	-- store auctionItem
 	auctionItem:PopulateCompactRecords()
 	private.auctions[itemString] = auctionItem
+	
+	-- ʕ •ᴥ•ʔ✿ DEBUG: Item added to results ✿ ʕ •ᴥ•ʔ
+	
+	-- ʕ •ᴥ•ʔ✿ INSTANT RESULTS UPDATE ✿ ʕ •ᴥ•ʔ
+	-- Immediately update the results table when we find a matching item
+	private:UpdateRT()
+	
+	-- Enable the results table if this is the first item found
+	if private.searchFrame.rt.disabled then
+		private.searchFrame.rt:SetDisabled(false)
+	end
+	
+	-- ʕ •ᴥ•ʔ✿ VISUAL FEEDBACK FOR NEW ITEMS ✿ ʕ •ᴥ•ʔ
+	-- Flash the status bar briefly to indicate new items found
+	if private.searchFrame.statusBar.Flash then
+		private.searchFrame.statusBar:Flash()
+	end
+	
+	-- Update status to show items found
+	local itemCount = 0
+	for _ in pairs(private.auctions) do
+		itemCount = itemCount + 1
+	end
+	
+	-- ʕ •ᴥ•ʔ✿ ENHANCED STATUS WITH PROGRESS ✿ ʕ •ᴥ•ʔ
+	local progressText = ""
+	if scanStatus and scanStatus[1] and scanStatus[2] then
+		progressText = format(" (Filter %d/%d)", scanStatus[1] + 1, scanStatus[2])
+	end
+	
+	if itemCount == 1 then
+		private.searchFrame.statusBar:SetStatusText(format("Live Results: Found 1 matching item%s...", progressText))
+	else
+		private.searchFrame.statusBar:SetStatusText(format("Live Results: Found %d matching items%s...", itemCount, progressText))
+	end
+
 end
 
 function private:UpdateRT()

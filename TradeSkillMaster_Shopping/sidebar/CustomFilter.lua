@@ -115,7 +115,18 @@ function private.Create(parent)
 	
 	TSMAPI.GUI:CreateHorizontalLine(frame, -(y+55))
 	
-	-- row 7 - usable / exact
+	-- row 7 - forge level
+	y = y + 60
+	local forgeList = {"", "Titanforged", "Warforged", "Lightforged"}
+	local forgeDropdown = TSMAPI.GUI:CreateDropdown(frame, forgeList, "")
+	forgeDropdown:SetLabel(L["Forge Level"])
+	forgeDropdown:SetPoint("TOPLEFT", 5, -y)
+	forgeDropdown:SetPoint("TOPRIGHT", 0, -y)
+	frame.forgeDropdown = forgeDropdown
+	
+	TSMAPI.GUI:CreateHorizontalLine(frame, -(y+55))
+	
+	-- row 8 - usable / exact
 	y = y + 60
 	local usableCheckBox = TSMAPI.GUI:CreateCheckBox(frame, L["If set, only items which are usable by your character will be included in the results."])
 	usableCheckBox:SetLabel("Usable")
@@ -131,7 +142,7 @@ function private.Create(parent)
 	
 	TSMAPI.GUI:CreateHorizontalLine(frame, -(y+30))
 	
-	-- row 8 - maximum quantity
+	-- row 9 - maximum quantity
 	y = y + 35
 	local maxQtyText = TSMAPI.GUI:CreateLabel(frame)
 	maxQtyText:SetPoint("TOPLEFT", 5, -y)
@@ -147,7 +158,7 @@ function private.Create(parent)
 	
 	TSMAPI.GUI:CreateHorizontalLine(frame, -(y+35))
 	
-	-- row 9 - clear / search buttons
+	-- row 10 - clear / search buttons
 	local clearBtn = TSMAPI.GUI:CreateButton(frame, 20)
 	clearBtn:SetPoint("BOTTOMLEFT", 5, 5)
 	clearBtn:SetWidth((frame:GetWidth()/2)-7.5)
@@ -178,6 +189,7 @@ function private:ResetFilters(frame)
 	frame.subClassDropdown:SetValue()
 	frame.subClassDropdown:SetDisabled(true)
 	frame.rarityDropdown:SetValue()
+	frame.forgeDropdown:SetValue()
 	frame.usableCheckBox:SetValue(false)
 	frame.exactCheckBox:SetValue(false)
 	frame.maxQtyBox:SetText("")
@@ -216,6 +228,12 @@ function private:StartSearch(frame)
 	local rarity = frame.rarityDropdown:GetValue()
 	if rarity then
 		filter = format("%s/%s", filter,  _G["ITEM_QUALITY"..rarity.."_DESC"])
+	end
+	
+	local forgeLevel = frame.forgeDropdown:GetValue()
+	if forgeLevel and forgeLevel > 1 then
+		local forgeList = {"", "Titanforged", "Warforged", "Lightforged"}
+		filter = format("%s/%s", filter, forgeList[forgeLevel])
 	end
 	
 	if frame.usableCheckBox:GetValue() then

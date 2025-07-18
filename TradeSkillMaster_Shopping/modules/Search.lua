@@ -9,6 +9,7 @@
 local TSM = select(2, ...)
 local Search = TSM:NewModule("Search", "AceEvent-3.0", "AceHook-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("TradeSkillMaster_Shopping") -- loads the localization table
+local Util = TSM:GetModule("Util")
 local private = {}
 
 -- ------------------------------------------------ --
@@ -16,7 +17,7 @@ local private = {}
 -- ------------------------------------------------ --
 
 function Search:Show(frame)
-	TSM.Util:SetParent(frame)
+	Util:SetParent(frame)
 	private.searchBar = private.searchBar or private:CreateSearchBar(frame)
 	private.searchBar:Show()
 	private.searchBar.editBox:SetFocus()
@@ -428,9 +429,42 @@ local function GetItemRarity(str)
 	end
 end
 
+-- ʕ •ᴥ•ʔ✿ FORGE FILTER FUNCTIONS ✿ ʕ •ᴥ•ʔ
+local FORGE_LEVEL_MAP = {
+	BASE = 0,
+	TITANFORGED = 1,
+	WARFORGED = 2,
+	LIGHTFORGED = 3
+}
+
+local function GetForgeLevel(str)
+	local lowerStr = strlower(str)
+	if lowerStr == "titanforged" or lowerStr == "tf" then
+		return FORGE_LEVEL_MAP.TITANFORGED
+	elseif lowerStr == "warforged" or lowerStr == "wf" then
+		return FORGE_LEVEL_MAP.WARFORGED
+	elseif lowerStr == "lightforged" or lowerStr == "lf" then
+		return FORGE_LEVEL_MAP.LIGHTFORGED
+	end
+end
+
+local function GetForgeLevelFromLink(itemLink)
+	if not itemLink then return FORGE_LEVEL_MAP.BASE end
+	if _G.GetItemLinkTitanforge then
+		local forgeValue = GetItemLinkTitanforge(itemLink)
+		-- Validate the returned value against known FORGE_LEVEL_MAP values
+		for _, knownValue in pairs(FORGE_LEVEL_MAP) do
+			if forgeValue == knownValue then
+				return forgeValue
+			end
+		end
+	end
+	return FORGE_LEVEL_MAP.BASE
+end
+
 local function GetSearchFilterOptions(searchTerm)
 	local parts = {("/"):split(searchTerm)}
-	local queryString, class, subClass, minLevel, maxLevel, minILevel, maxILevel, rarity, usableOnly, exactOnly, evenOnly, maxQuantity, maxPrice
+	local queryString, class, subClass, minLevel, maxLevel, minILevel, maxILevel, rarity, usableOnly, exactOnly, evenOnly, maxQuantity, maxPrice, forgeLevel
 	
 	if #parts == 1 then
 		return true, parts[1]
@@ -481,6 +515,12 @@ local function GetSearchFilterOptions(searchTerm)
 			else
 				return false, L["Invalid Item Rarity"]
 			end
+		elseif GetForgeLevel(str) then
+			if not forgeLevel then
+				forgeLevel = GetForgeLevel(str)
+			else
+				return false, L["Invalid Forge Level"]
+			end
 		elseif strlower(str) == "usable" then
 			if not usableOnly then
 				usableOnly = 1
@@ -524,8 +564,7 @@ local function GetSearchFilterOptions(searchTerm)
 		minILevel = oldMaxILevel
 	end
 	
-	return true, queryString or "", class or 0, subClass or 0, minLevel or 0, maxLevel or 0, minILevel or 0, maxILevel or 0, rarity or -1, usableOnly or 0, exactOnly or nil, evenOnly or nil, maxQuantity or 0, maxPrice
-	--return true, queryString or "", class or 0, subClass or 0, minLevel or 0, maxLevel or 0, minILevel or 0, maxILevel or 0, rarity or 0, usableOnly or 0, exactOnly or nil, evenOnly or nil, maxQuantity or 0, maxPrice
+	return true, queryString or "", class or 0, subClass or 0, minLevel or 0, maxLevel or 0, minILevel or 0, maxILevel or 0, rarity or -1, usableOnly or 0, exactOnly or nil, evenOnly or nil, maxQuantity or 0, maxPrice, forgeLevel or -1
 end
 
 -- gets all the filters for a given search term (possibly semicolon-deliminated list of search terms)
@@ -533,6 +572,53 @@ function Search:GetFilters(searchQuery)
 	local filters = {}
 	local searchTerms = {(";"):split(searchQuery)}
 	filters.num = 0
+	
+	-- ʕ •ᴥ•ʔ✿ SPECIAL HANDLING FOR FORGE-ONLY SEARCHES ✿ ʕ •ᴥ•ʔ
+	local isForgeOnlySearch = false
+	for _, searchTerm in ipairs(searchTerms) do
+		local lowerTerm = strlower(searchTerm:trim())
+		if lowerTerm == "lightforged" or lowerTerm == "lf" or 
+		   lowerTerm == "warforged" or lowerTerm == "wf" or 
+		   lowerTerm == "titanforged" or lowerTerm == "tf" then
+			isForgeOnlySearch = true
+			break
+		end
+	end
+	
+	-- If it's a forge-only search, use a more targeted approach
+	if isForgeOnlySearch and #searchTerms == 1 then
+		local searchTerm = searchTerms[1]:trim()
+		local lowerTerm = strlower(searchTerm)
+		local forgeLevel = nil
+		
+		if lowerTerm == "lightforged" or lowerTerm == "lf" then
+			forgeLevel = 3
+		elseif lowerTerm == "warforged" or lowerTerm == "wf" then
+			forgeLevel = 2
+		elseif lowerTerm == "titanforged" or lowerTerm == "tf" then
+			forgeLevel = 1
+		end
+		
+		if forgeLevel then
+			-- Create multiple targeted searches for different item categories
+			-- This reduces the search scope and makes it faster
+			local categories = {
+				{class=2, subClass=0},   -- Weapons
+				{class=4, subClass=0},   -- Armor
+				{class=3, subClass=0},   -- Gems
+				{class=7, subClass=0},   -- Trade Goods
+			}
+			
+			for _, cat in ipairs(categories) do
+				tinsert(filters, {name="", class=cat.class, subClass=cat.subClass, forgeLevel=forgeLevel})
+			end
+			
+			filters.num = #categories
+			filters.currentFilter = searchTerm
+			filters.currentSearchTerm = searchTerm
+			return filters
+		end
+	end
 	
 	for i=1, #searchTerms do
 		local searchTerm = searchTerms[i]:trim()
@@ -553,7 +639,7 @@ function Search:GetFilters(searchQuery)
 				end
 			end
 		else
-			local isValid, queryString, class, subClass, minLevel, maxLevel, minILevel, maxILevel, rarity, usableOnly, exactOnly, evenOnly, maxQuantity, maxPrice = GetSearchFilterOptions(searchTerm)
+			local isValid, queryString, class, subClass, minLevel, maxLevel, minILevel, maxILevel, rarity, usableOnly, exactOnly, evenOnly, maxQuantity, maxPrice, forgeLevel = GetSearchFilterOptions(searchTerm)
 					
 			if not isValid then
 				TSM:Print(L["Skipped the following search term because it's invalid."])
@@ -576,7 +662,7 @@ function Search:GetFilters(searchQuery)
 				else
 					filters.currentSearchTerm = searchTerm
 				end
-				tinsert(filters, {name=queryString, usable=usableOnly, minLevel=minLevel, maxLevel=maxLevel, quality=rarity, class=class, subClass=subClass, minILevel=minILevel, maxILevel=maxILevel, exactOnly=exactOnly, evenOnly=evenOnly, maxQuantity=maxQuantity, maxPrice=maxPrice})
+				tinsert(filters, {name=queryString, usable=usableOnly, minLevel=minLevel, maxLevel=maxLevel, quality=rarity, class=class, subClass=subClass, minILevel=minILevel, maxILevel=maxILevel, exactOnly=exactOnly, evenOnly=evenOnly, maxQuantity=maxQuantity, maxPrice=maxPrice, forgeLevel=forgeLevel})
 			end
 		end
 	end
